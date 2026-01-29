@@ -1,8 +1,8 @@
 import { chromium } from "playwright";
 
 const waitRandom = (min, max) =>
-  new Promise(r =>
-    setTimeout(r, Math.floor(Math.random() * (max - min + 1) + min))
+  new Promise(resolve =>
+    setTimeout(resolve, Math.floor(Math.random() * (max - min + 1) + min))
   );
 
 async function typeLikeHuman(page, selector, text) {
@@ -15,11 +15,25 @@ async function typeLikeHuman(page, selector, text) {
   }
 }
 
-export async function consultarRefrendo({ placa, serie }) {
-  if (!placa || !serie) {
-    throw new Error("Faltan parámetros: placa o serie");
-  }
+async function clickBuscar(page) {
+  const attempts = [
+    () => page.getByRole("button").filter({ hasText: "Buscar" }).first().click(),
+    () => page.getByRole("button").filter({ hasText: "Consultar" }).first().click(),
+    () => page.locator('button:has-text("Buscar")').first().click(),
+    () => page.locator("button").nth(0).click(),
+    () => page.getByRole("button", { name: "Left Align" }).click()
+  ];
 
+  for (const fn of attempts) {
+    try {
+      await fn();
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
+export async function consultarRefrendo({ placa, serie, raw = false }) {
   const browser = await chromium.launch({
     headless: true,
     args: [
@@ -39,58 +53,44 @@ export async function consultarRefrendo({ placa, serie }) {
 
   try {
     await page.goto("https://refrendodigital.michoacan.gob.mx/", {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
       timeout: 60000
     });
 
-    await waitRandom(1500, 2500);
+    await waitRandom(1200, 2000);
 
     await typeLikeHuman(page, 'input[name="placa"]', placa);
-    await waitRandom(600, 1200);
+    await waitRandom(500, 1000);
 
     await typeLikeHuman(page, 'input[name="serie"]', serie);
     await waitRandom(800, 1500);
 
-    // Click botón buscar
-    const clicked =
-      await page.getByRole("button", { name: "Left Align" }).click().then(() => true).catch(() => false);
-
+    const clicked = await clickBuscar(page);
     if (!clicked) {
-      throw new Error("No se encontró el botón de búsqueda");
+      throw new Error("No se encontró el botón Buscar");
     }
 
-    await page.waitForSelector("text=Nombre:", { timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
     await waitRandom(1500, 2500);
 
-    const data = await page.evaluate(() => {
-      const getVal = regex => {
-        const text = document.body.innerText;
-        const match = text.match(regex);
-        return match ? match[1].trim() : "No encontrado";
-      };
+    const urlFinal = page.url();
+    const bodyText = await page.evaluate(() => document.body.innerText);
 
-      const cleanMoney = text => {
-        const match = (text || "").match(/[\d,.]+/);
-        return match ? `$ ${match[0]}` : "Sin adeudo";
-      };
-
+    // 🔥 DEVUELVE TODO EL TEXTO REAL
+    if (raw) {
       return {
-        titular: getVal(/Nombre:\s*(.+?)(?=\s+RFC:|$)/i),
-        rfc: getVal(/RFC:\s*([A-Z0-9]{10,13})/i),
-        vehiculo: {
-          placa: getVal(/Placa:\s*(\S+)/i),
-          serie: getVal(/Serie:\s*(\S+)/i),
-          modelo: getVal(/Modelo:\s*(\d{4})/i),
-          marca: getVal(/Marca:\s*(.+?)(?=\s+Tipo:|$)/i),
-          tipo: getVal(/Tipo:\s*(.+?)(?=\s+Uso:|$)/i)
-        },
-        totalPagar: cleanMoney(getVal(/TOTAL A PAGAR\s*(.+)/i)),
-        fechaVencimiento: getVal(/Vence el:\s*(\d{2}\/\d{2}\/\d{4})/i),
-        fechaConsulta: new Date().toISOString().split("T")[0]
+        raw: true,
+        urlFinal,
+        bodyText
       };
-    });
+    }
 
-    return data;
+    // Placeholder si luego quieres extracción limpia
+    return {
+      mensaje: "Modo normal aún no implementado",
+      urlFinal
+    };
+
   } finally {
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
